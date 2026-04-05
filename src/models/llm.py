@@ -4,6 +4,7 @@ Sends retrieved chunks + question to OpenRouter LLM and returns answer.
 """
 
 import os
+import time
 import httpx
 from dotenv import load_dotenv
 
@@ -19,6 +20,7 @@ class LLMProcessor:
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.model = os.getenv("LLM_MODEL", "google/gemma-3-27b-it:free")
+        print(f"LLM using model: {self.model}")
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
 
         if not self.api_key:
@@ -63,9 +65,39 @@ ANSWER:"""
 
         return prompt
 
+    def _call_api(self, prompt: str) -> str:
+        """
+        Makes a single API call to OpenRouter.
+
+        Args:
+            prompt: Full prompt string
+
+        Returns:
+            Answer text from LLM.
+        """
+        response = httpx.post(
+            self.api_url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 400
+            },
+            timeout=60.0
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result["choices"][0]["message"]["content"].strip()
+
     def generate(self, query: str, chunks: list[dict]) -> dict:
         """
         Generates a grounded answer from query and retrieved chunks.
+        Retries once on rate limit (429) after a 20 second wait.
 
         Args:
             query: User question
@@ -81,30 +113,25 @@ ANSWER:"""
             }
 
         prompt = self._build_prompt(query, chunks)
+        answer = ""
 
         try:
-            response = httpx.post(
-                self.api_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                    "max_tokens": 400
-                },
-                timeout=30.0
-            )
+            answer = self._call_api(prompt)
 
-            response.raise_for_status()
-            result = response.json()
-            answer = result["choices"][0]["message"]["content"].strip()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                print("Rate limit hit — waiting 20 seconds and retrying...")
+                time.sleep(20)
+                try:
+                    answer = self._call_api(prompt)
+                except Exception as retry_e:
+                    answer = f"LLM error after retry: {str(retry_e)[:100]}"
+            else:
+                answer = f"LLM error: {str(e)[:100]}"
 
         except httpx.TimeoutException:
             answer = "Request timed out. Please try again."
+
         except Exception as e:
             answer = f"LLM error: {str(e)[:100]}"
 

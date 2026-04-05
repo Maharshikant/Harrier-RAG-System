@@ -1,5 +1,7 @@
-# Automotive RAG System
-## Multimodal Retrieval-Augmented Generation for Tata Harrier BS6 Service Manual Intelligence
+# Tata Harrier BS6 — Multimodal RAG System
+
+> Retrieval-Augmented Generation system for Tata Harrier BS6 service manual intelligence.
+> Supports text, table, and image-based queries via FastAPI.
 
 ---
 
@@ -47,7 +49,7 @@ presents specific challenges that make retrieval non-trivial:
 - **Specialized terminology:** Terms like TPMS (Tyre Pressure Monitoring
   System), ESP (Electronic Stability Programme), HVAC controls, BS6 emission
   norms, and Kryotec diesel engine specifications are Harrier-specific and
-  context-dependent. A generic search engine has no awareness of these.
+  context-dependent.
 - **Precision requirements:** Answers are safety-critical. An incorrect tyre
   pressure value, wrong engine oil grade (e.g. 15W-40 vs 0W-30), or missed
   service interval for the Harrier's Kryotec 2.0L diesel engine can cause
@@ -79,18 +81,210 @@ official Tata Harrier BS6 Owner's Manual.
 
 ### Expected Outcomes
 
-A successful system will enable the following query types against the
-Tata Harrier BS6 Owner's Manual:
+A successful system will enable the following query types:
 
 - **Text retrieval:** "What is the procedure to use the scissor jack safely
   on the Harrier?" → returns step-by-step procedure with page reference.
 - **Table retrieval:** "What engine oil grade and capacity is recommended
-  for the Kryotec 2.0L diesel engine?" → returns specification table with
-  grade, viscosity, and volume data.
+  for the Kryotec 2.0L diesel engine?" → returns specification table data.
 - **Image retrieval:** "What does the orange TPMS warning light on the
-  dashboard mean?" → returns a VLM-generated description of the warning
-  indicator diagram and associated action.
+  dashboard mean?" → returns VLM-generated description of the warning diagram.
 
 The system reduces manual lookup time from 10–20 minutes to under 30 seconds,
 empowers vehicle owners to safely self-diagnose common issues, and provides
-a scalable foundation that can be extended to other Tata Motors vehicle manuals.
+a scalable foundation for other Tata Motors vehicle manuals.
+
+---
+
+## Architecture Overview
+```
+                   ┌─── Text chunks ──────────────────────────┐
+PDF → PyMuPDF ─────┼─── Table chunks ─────────────────────────┼──► Sentence-Transformers ──► ChromaDB
+                   └─── Image chunks ──► VLM (OpenRouter) ─────┘
+                                        (image → text description)
+
+Query ──► Embed ──► ChromaDB (similarity search) ──► Top-K Chunks ──► LLM (OpenRouter) ──► Answer + Source
+```
+
+**Ingestion Pipeline:** PDF → PyMuPDF parser → 3 chunk types (text, table, image)
+→ Images processed by VLM → All chunks embedded → Stored in ChromaDB
+
+**Query Pipeline:** User question → Embedded → ChromaDB similarity search
+→ Top-K chunks retrieved → LLM generates grounded answer → Response with sources
+
+---
+
+## Technology Choices
+
+| Component | Choice | Justification |
+|---|---|---|
+| PDF Parser | PyMuPDF | Fast, reliable, native table detection, no external API needed |
+| Embedding Model | sentence-transformers (all-MiniLM-L6-v2) | Runs locally, free, strong semantic similarity for technical text |
+| Vector Store | ChromaDB | Local persistent storage, metadata filtering by chunk type, no cloud setup |
+| LLM | OpenRouter (google/gemma-3-27b-it:free) | Free tier access to capable models, easy model switching via `.env` |
+| VLM | OpenRouter (nvidia/nemotron-nano-12b-v2-vl:free) | Free vision model, handles technical diagrams from PDF pages |
+| Framework | FastAPI | Native Pydantic validation, auto Swagger UI, production-ready |
+
+---
+
+## Setup Instructions
+
+### Prerequisites
+- Python 3.11
+- Git
+- OpenRouter API key (free at [openrouter.ai](https://openrouter.ai))
+
+### 1. Clone the repository
+```bash
+git clone https://github.com/YOUR_USERNAME/automotive-rag-system.git
+cd automotive-rag-system
+```
+
+### 2. Create virtual environment
+```bash
+# Windows
+py -3.11 -m venv venv
+.\venv\Scripts\activate
+
+# Mac/Linux
+python3.11 -m venv venv
+source venv/bin/activate
+```
+
+### 3. Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Configure environment
+```bash
+cp .env.example .env
+# Edit .env and add your OpenRouter API key
+```
+
+### 5. Add sample PDF
+
+Place your PDF in the `sample_documents/` folder:
+```
+sample_documents/harrier-bs6-owners-manual.pdf
+```
+
+### 6. Run the server
+```bash
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 7. Ingest the PDF
+
+Open browser at `http://localhost:8000/docs` and use POST `/ingest` to upload your PDF.
+
+---
+
+## API Documentation
+
+### GET /health
+Returns system status, model info, indexed chunk count, and uptime.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "model_llm": "google/gemma-3-27b-it:free",
+  "model_vlm": "nvidia/nemotron-nano-12b-v2-vl:free",
+  "model_embedding": "all-MiniLM-L6-v2",
+  "chunks_indexed": 2378,
+  "uptime_seconds": 53.07,
+  "timestamp": "2026-04-05T08:49:38"
+}
+```
+
+### POST /ingest
+Accepts PDF file upload, parses text + tables + images, embeds and indexes chunks.
+
+**Request:** `multipart/form-data` with PDF file
+
+**Response:**
+```json
+{
+  "message": "PDF ingested successfully.",
+  "filename": "harrier-bs6-owners-manual.pdf",
+  "total_chunks": 2378,
+  "text_chunks": 1724,
+  "table_chunks": 352,
+  "image_chunks": 302,
+  "chunks_indexed": 2378,
+  "total_indexed": 2378,
+  "processing_time_seconds": 45.2
+}
+```
+
+### POST /query
+Accepts natural language question, returns grounded answer with source references.
+
+**Request:**
+```json
+{
+  "question": "What engine oil grade is recommended for the Kryotec diesel engine?",
+  "top_k": 5
+}
+```
+
+**Response:**
+```json
+{
+  "question": "What engine oil grade is recommended for the Kryotec diesel engine?",
+  "answer": "0W20 ACEA C2 is the recommended engine oil grade. (harrier-bs6-owners-manual.pdf, page 242, text)",
+  "sources": [
+    {
+      "filename": "harrier-bs6-owners-manual.pdf",
+      "page_number": 242,
+      "chunk_type": "text",
+      "similarity": 0.5088
+    }
+  ],
+  "chunks_retrieved": 5
+}
+```
+
+### GET /docs
+Auto-generated Swagger UI — available at `http://localhost:8000/docs`
+
+---
+
+## Screenshots
+
+### Swagger UI
+![Swagger UI](screenshots/01_swagger_ui.png)
+
+### Health Endpoint
+![Health](screenshots/02_health.png)
+
+### Successful Ingestion
+![Ingest](screenshots/03_ingest.png)
+
+### Text Query Result
+![Text Query](screenshots/04_query_text.png)
+
+### Table Query Result
+![Table Query](screenshots/05_query_table.png)
+
+### Image Query Result
+![Image Query](screenshots/06_query_image.png)
+
+---
+
+## Limitations & Future Work
+
+### Current Limitations
+- Free tier API rate limits (429 errors) may require retries between queries so LLM_Models are changed for different output ex. google/gemma-3-27b-it:free or gpt-oss-20b or  openai/gpt-oss-20b:free
+- VLM processing applied to first 20 images per document due to free tier constraints — remaining image chunks use placeholder descriptions
+- Embedding model `all-MiniLM-L6-v2` is optimized for general text — a domain-specific automotive embedding model would improve retrieval accuracy
+- No authentication on API endpoints — not production-ready as-is
+
+### Future Work
+- Enable full VLM processing for all images with a paid API tier
+- Add `/documents` endpoint to list all indexed files
+- Add `/delete` endpoint to remove specific documents from the index
+- Implement re-ranking of retrieved chunks for improved accuracy
+- Add support for multi-document cross-referencing queries
+- Deploy on cloud (AWS/GCP) with Docker for production use

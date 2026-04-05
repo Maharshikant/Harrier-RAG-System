@@ -33,7 +33,12 @@ def run_ingestion(pdf_path: str, process_images: bool = True) -> dict:
     if process_images:
         print("\nStep 2: Processing images through VLM...")
         vlm = VLMProcessor()
-        chunks = vlm.process_chunks(chunks)
+        # Process first 20 images only to stay within free tier limits
+        image_chunks = [c for c in chunks if c.chunk_type == "image"][:20]
+        non_image_chunks = [c for c in chunks if c.chunk_type != "image"]
+        remaining_images = [c for c in chunks if c.chunk_type == "image"][20:]
+        processed = vlm.process_chunks(image_chunks)
+        chunks = non_image_chunks + processed + remaining_images
     else:
         print("\nStep 2: Skipping VLM (process_images=False)")
 
