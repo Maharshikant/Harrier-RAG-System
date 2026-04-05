@@ -136,7 +136,8 @@ Query ──► Embed ──► ChromaDB (similarity search) ──► Top-K Chu
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/YOUR_USERNAME/automotive-rag-system.git
+git clone https://github.com/Maharshikant/Harrier-RAG-System.git
+cd Harrier-RAG-System
 cd automotive-rag-system
 ```
 

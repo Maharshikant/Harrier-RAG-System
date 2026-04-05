@@ -32,3 +32,5 @@ desktop.ini
 
 # Jupyter
 .ipynb_checkpoints/
+
+chroma_db/
